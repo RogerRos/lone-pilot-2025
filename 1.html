@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Space Sandbox – Canvas (∞ Procedural)</title>
+  <style>
+    :root{
+      --bg:#0a0e14; --panel:#0d1117; --muted:#94a3b8; --line:#1f2937;
+      --good:#34d399; --warn:#f59e0b; --bad:#ef4444; --ink:#e5e7eb; --accent:#60a5fa;
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:#cbd5e1;font-family:Inter,system-ui,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Helvetica,Arial}
+    #wrap{position:fixed;inset:0;display:grid;grid-template-rows:auto 1fr auto}
+    header,footer{padding:8px 12px;background:var(--panel);border-bottom:1px solid var(--line)}
+    footer{border-bottom:none;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+    #hud{display:flex;gap:16px;align-items:center;font-weight:600;flex-wrap:wrap}
+    #hud span{opacity:.95}
+    #canvas{display:block;width:100%;height:100%}
+    #overlay{position:absolute;inset:0;display:grid;place-items:center;pointer-events:none}
+    .panel{pointer-events:auto;text-align:center;background:#0b1220cc;padding:22px 26px;border:1px solid #233044;border-radius:14px;box-shadow:0 10px 30px #0008}
+    .title{font-size:clamp(20px,3vw,28px);margin:0 0 6px}
+    .muted{color:var(--muted);font-size:13px;margin:6px 0 0}
+    .keys{display:flex;gap:6px;justify-content:center;margin-top:10px;font-size:12px;color:#cbd5e1;flex-wrap:wrap}
+    .key{border:1px solid #334155;padding:4px 6px;border-radius:6px;background:#111827}
+    .btn{pointer-events:auto;appearance:none;border:1px solid #334155;background:#111827;color:#e2e8f0;padding:8px 12px;border-radius:8px;font-weight:600;cursor:pointer}
+    .btn:active{transform:translateY(1px)}
+    .buildbar{position:absolute;left:50%;bottom:14px;transform:translateX(-50%);display:flex;gap:10px;background:#0b1220cc;border:1px solid #233044;border-radius:12px;padding:8px}
+    .slot{min-width:120px;padding:6px 8px;border-radius:8px;border:1px solid #334155;text-align:center}
+    .slot.active{outline:2px solid var(--accent)}
+    .slot .cost{font-size:11px;color:var(--muted)}
+    .hint{position:absolute;left:12px;bottom:12px;font-size:12px;color:#9aa8bb;background:#0b1220cc;border:1px solid #233044;border-radius:10px;padding:6px 8px}
+  </style>
+</head>
+<body>
+  <div id="wrap">
+    <header>
+      <div id="hud">
+        <span>Score: <strong id="score">0</strong></span>
+        <span>Vidas: <strong id="lives">3</strong></span>
+        <span>HP: <strong id="hp">200</strong></span>
+        <span>Mineral: <strong id="ore">0</strong></span>
+        <span>Arma: <strong id="weapon">Bláster</strong></span>
+        <span>Brake[X]: <strong id="brake">OFF</strong></span>
+        <span>Coords: <strong id="coords">0,0</strong></span>
+        <span>FPS: <strong id="fps">0</strong></span>
+      </div>
+    </header>
+    <div style="position:relative">
+      <canvas id="canvas"></canvas>
+      <div id="overlay">
+        <div class="panel" id="panel">
+          <h1 class="title">Space Sandbox ∞</h1>
+          <p>Mundo infinito procedural con física espacial, construcción avanzada y armas nuevas.</p>
+          <div class="keys">
+            <div class="key">Ratón: Apuntar · Botón derecho: Empuje</div>
+            <div class="key">WASD: Thrust fino (sin límite de velocidad)</div>
+            <div class="key">Click izq: Disparar · Q/E: Cambiar arma</div>
+            <div class="key">B: Construir · Rueda: Rotar pieza · G: Cuadrícula · C: Reciclar</div>
+            <div class="key">X: Auto-frenado ON/OFF</div>
+            <div class="key">1/2/3: Torreta/Muro/Colector</div>
+          </div>
+          <p class="muted">Cierra tu base con muros para protección total. Los misiles se auto-detonan a los 5s si fallan.</p>
+          <button class="btn" id="startBtn">Jugar</button>
+        </div>
+        <div class="buildbar" id="buildbar" style="display:none">
+          <div class="slot" data-type="turret">Torreta<br><span class="cost" data-cost="turret">Coste: 12</span></div>
+          <div class="slot" data-type="wall">Muro<br><span class="cost" data-cost="wall">Coste: 3</span></div>
+          <div class="slot" data-type="collector">Colector<br><span class="cost" data-cost="collector">Coste: 18</span></div>
+        </div>
+        <div class="hint" id="hint" style="display:none"></div>
+      </div>
+    </div>
+    <footer>
+      Procedural ∞, armas (misil guiado / cañón pesado), HP con regeneración, construcción cerrada, oleadas coordinadas y auto-frenado con X.
+    </footer>
+  </div>
+
+  <script>
+  "use strict";
+  // ===== Config =====
+  const CONFIG = {
+    camera: { lerp: 0.12, lead: 0.25, maxLead: 220 }, // clamp de adelantamiento
+    grid: { size: 24 },
+    space: { dragPerSec: 0.02, autoBrakePerSec: 0.6 },
+    player: { thrust: 1800, w: 22, h: 28, cooldown: 0.12, maxLives: 3, hpMax: 200, hpRegen: 6 },
+    bullet: { speed: 900, size: 4, life: 1.8, dmg: 12 },
+    heavy: { speed: 280, life: 3.2, dmg: 260, cooldown: 1.2, radius: 7 }, // super lenta y muy potente
+    missile: { speed: 520, life: 5.0, turn: 2.6, radius: 60, dmg: 80, cooldown: 0.6, avoidLook: 260, avoidPad: 20 },
+    enemy: { waveEveryMin: 22, waveEveryMax: 36 },
+    types: {
+      chaser: { speed: 160, hp: 30, size: 22, touch: 16 },
+      sniper: { speed: 120, hp: 24, size: 20, range: 640, cooldown: 1.2, bullet:{speed:520,dmg:10}},
+      tanker: { speed: 90, hp: 150, size: 28, touch: 22 },
+      splitter: { speed: 150, hp: 26, size: 18, touch: 12 }
+    },
+    asteroid: { perChunkTry: 32, minR: 24, maxR: 64, hpScale: 0.5 },
+    ore: { magnetR: 140, value: 1 },
+    refundRate: 0.8,
+    structures: {
+      turret: { cost: 12, range: 320, fireRate: 0.42, rotSpeed: 6, hp: 120, minGap: 40 },
+      wall: { cost: 3, hp: 220, minGap: 24, solid:true },
+      collector: { cost: 18, radius: 160, minGap: 60 }
+    },
+    proc: { chunk: 640, seed: 1337, clusterStep: 2400, clusterRadius: 900, clusterChance: 0.35 }
+  };
+
+  // ===== Canvas & HUD =====
+  const canvas = document.getElementById("canvas");
+  const ctx = canvas.getContext("2d", { alpha: false, desynchronized: true });
+  const scoreEl = document.getElementById("score");
+  const livesEl = document.getElementById("lives");
+  const hpEl = document.getElementById("hp");
+  const weaponEl = document.getElementById("weapon");
+  const brakeEl = document.getElementById("brake");
+  const coordsEl = document.getElementById("coords");
+  const fpsEl = document.getElementById("fps");
+  const oreEl = document.getElementById("ore");
+  const overlay = document.getElementById("overlay");
+  const panel = document.getElementById("panel");
+  const startBtn = document.getElementById("startBtn");
+  const buildbar = document.getElementById("buildbar");
+  const hintEl = document.getElementById("hint");
+
+  let DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+  function resize(){
+    const headerH = document.querySelector('header').offsetHeight;
+    const footerH = document.querySelector('footer').offsetHeight;
+    const Vw = Math.floor(window.innerWidth * DPR);
+    const Vh = Math.floor((window.innerHeight - (headerH + footerH)) * DPR);
+    canvas.width = Math.max(320, Vw);
+    canvas.height = Math.max(240, Vh);
+    canvas.style.width = `${Math.floor(canvas.width / DPR)}px`;
+    canvas.style.height = `${Math.floor(canvas.height / DPR)}px`;
+  }
+  window.addEventListener('resize', resize); resize();
+
+  // ===== Utils =====
+  const clamp=(v,a,b)=>Math.max(a,Math.min(b,v));
+  const dist2=(ax,ay,bx,by)=>{ let dx=ax-bx, dy=ay-by; return dx*dx+dy*dy; };
+  const now=()=>performance.now()/1000;
+  const rand=(a,b)=>a+Math.random()*(b-a);
+  const lerp=(a,b,t)=>a+(b-a)*t;
+  const snap=(v,s)=>Math.round(v/s)*s;
+  const dragFactor=(dt,k)=>Math.exp(-(k??CONFIG.space.dragPerSec)*dt);
+
+  function clampVec(x,y,max){ const m=Math.hypot(x,y)||1; if(m<=max) return [x,y]; const k=max/m; return [x*k,y*k]; }
+
+  // ===== Audio =====
+  let audioCtx=null;
+  function resumeAudio(){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); if(audioCtx.state==='suspended') audioCtx.resume(); }catch(e){} }
+  function beep(type=0,t=0.06,f=620,v=0.02){ try{ audioCtx = audioCtx || new (window.AudioContext||window.webkitAudioContext)(); const o=audioCtx.createOscillator(); const g=audioCtx.createGain(); o.type=["square","sine","sawtooth","triangle"][type%4]; o.frequency.setValueAtTime(f,audioCtx.currentTime); g.gain.value=v; o.connect(g); g.connect(audioCtx.destination); o.start(); o.stop(audioCtx.currentTime+t);}catch(e){} }
+  window.addEventListener('pointerdown', resumeAudio, {once:true});
+
+  // seeded hash rng per cell
+  function h32(x,y,seed){ x|=0; y|=0; let h=seed|0; h^=x*374761393; h=(h<<13)|(h>>>19); h=h*1274126177|0; h^=y*668265263; h=(h<<15)|(h>>>17); h=h*461845907|0; return (h>>>0)/4294967295; }
+
+  // ===== World State =====
+  const state={
+    running:false, paused:false, last:0, fpsA:0, fpsC:0,
+    score:0, level:1, ore:0,
+    player:{ x:0, y:0, vx:0, vy:0, ax:0, ay:0, w:CONFIG.player.w, h:CONFIG.player.h, lives:CONFIG.player.maxLives, aimX:0, aimY:0, lastShot:0, hp:CONFIG.player.hpMax, lastHit:0, brake:false },
+    weapon:'blaster', // blaster | heavy | missile
+    bullets:[], heavyShots:[], missiles:[], enemyBullets:[], enemies:[], asteroids:[], ores:[], particles:[],
+    structures:[], // {type,x,y,rot,hp,solid}
+    build:{ enabled:false, sel:"turret", rot:0, showGrid:true, ghost:null },
+    camera:{ x:0, y:0 },
+    keys:new Set(), mouse:{x:0,y:0,down:false,rdown:false}
+  };
+
+  // ===== Input =====
+  window.addEventListener('mousemove', e=>{ const r=canvas.getBoundingClientRect(); state.mouse.x=(e.clientX-r.left)*DPR; state.mouse.y=(e.clientY-r.top)*DPR; });
+  window.addEventListener('mousedown', e=>{ if(e.button===0) state.mouse.down=true; if(e.button===2){ state.mouse.rdown=true; e.preventDefault(); } });
+  window.addEventListener('mouseup', e=>{ if(e.button===0) state.mouse.down=false; if(e.button===2) state.mouse.rdown=false; });
+  window.addEventListener('wheel', e=>{ if(state.build.enabled){ state.build.rot = (state.build.rot + (e.deltaY>0?1:-1)*Math.PI/8)%(Math.PI*2); e.preventDefault(); } }, {passive:false});
+  window.addEventListener('contextmenu', e=>{ e.preventDefault(); });
+  window.addEventListener('keydown', e=>{
+    if(e.code==='KeyP'){ state.paused=!state.paused; toggleOverlay(state.paused?'Pausa':''); return; }
+    if(e.code==='KeyB'){ state.build.enabled=!state.build.enabled; buildbar.style.display=state.build.enabled?'flex':'none'; hint(state.build.enabled?"Modo construcción activo":""); }
+    if(e.code==='KeyG'){ state.build.showGrid=!state.build.showGrid; hint(state.build.showGrid?"Cuadrícula ON":"Cuadrícula OFF"); }
+    if(e.code==='KeyR'){ state.build.rot = (state.build.rot+Math.PI/8)%(Math.PI*2); }
+    if(e.code==='KeyX'){ state.player.brake=!state.player.brake; brakeEl.textContent=state.player.brake?'ON':'OFF'; hint(state.player.brake?'Auto-frenado ON':'Auto-frenado OFF'); }
+    if(e.code==='KeyC'){ if(state.build.enabled) salvageUnderCursor(); }
+    if(e.code==='KeyQ'){ cycleWeapon(-1); }
+    if(e.code==='KeyE'){ cycleWeapon(1); }
+    if(e.code==='Digit1') state.build.sel='turret';
+    if(e.code==='Digit2') state.build.sel='wall';
+    if(e.code==='Digit3') state.build.sel='collector';
+    if(['KeyW','ArrowUp'].includes(e.code)) state.keys.add('up');
+    if(['KeyS','ArrowDown'].includes(e.code)) state.keys.add('down');
+    if(['KeyA','ArrowLeft'].includes(e.code)) state.keys.add('left');
+    if(['KeyD','ArrowRight'].includes(e.code)) state.keys.add('right');
+    if(e.code==='Space') state.keys.add('shoot');
+  });
+  window.addEventListener('keyup', e=>{
+    if(['KeyW','ArrowUp'].includes(e.code)) state.keys.delete('up');
+    if(['KeyS','ArrowDown'].includes(e.code)) state.keys.delete('down');
+    if(['KeyA','ArrowLeft'].includes(e.code)) state.keys.delete('left');
+    if(['KeyD','ArrowRight'].includes(e.code)) state.keys.delete('right');
+    if(e.code==='Space') state.keys.delete('shoot');
+  });
+  buildbar.querySelectorAll('.slot').forEach(el=>{ el.addEventListener('click',()=>{ state.build.sel=el.dataset.type; updateBuildbar(); }); });
+
+  // ===== Game Flow =====
+  startBtn.addEventListener('click', startGame);
+  function startGame(){
+    resumeAudio();
+    state.running=true; state.paused=false; state.score=0; state.ore=0; state.level=1; state.weapon='blaster'; weaponEl.textContent='Bláster';
+    const px = 0, py = 0; // origen
+    Object.assign(state.player,{x:px,y:py,vx:0,vy:0,lives:CONFIG.player.maxLives,hp:CONFIG.player.hpMax,brake:false});
+    brakeEl.textContent='OFF';
+    state.enemies.length=0; state.bullets.length=0; state.heavyShots.length=0; state.missiles.length=0; state.enemyBullets.length=0; state.ores.length=0; state.structures.length=0; state.particles.length=0; state.asteroids.length=0;
+    waveTimer = rand(CONFIG.enemy.waveEveryMin, CONFIG.enemy.waveEveryMax);
+    toggleOverlay(''); updateBuildbar(); state.last=now();
+    requestAnimationFrame(loop);
+  }
+
+  // ===== Loop =====
+  let waveTimer=28;
+  function loop(){
+    if(!state.running) return;
+    const t=now(); let dt=t-state.last; if(dt>0.05) dt=0.05; state.last=t;
+    state.fpsA+=dt; state.fpsC++; if(state.fpsA>=0.5){ fpsEl.textContent=Math.round(state.fpsC/state.fpsA); state.fpsA=0; state.fpsC=0; }
+    if(!state.paused){ update(dt); draw(); }
+    requestAnimationFrame(loop);
+  }
+
+  // ===== Procedural world =====
+  const chunks=new Map(); // key:"cx,cy" -> {asteroids:[...]}
+  function ensureChunksAround(x,y){ const s=CONFIG.proc.chunk; const cx=Math.floor(x/s), cy=Math.floor(y/s); for(let i=-2;i<=2;i++) for(let j=-2;j<=2;j++){ const k=(cx+i)+","+(cy+j); if(!chunks.has(k)){ chunks.set(k, genChunk(cx+i,cy+j)); } } }
+
+  function clusterCenters(cx,cy){ // devuelve centros cercanos de clusters/islas
+    const step=CONFIG.proc.clusterStep; const seed=CONFIG.proc.seed^0xabc123;
+    const ax=cx*CONFIG.proc.chunk, ay=cy*CONFIG.proc.chunk; // chunk origin in world
+    const ccx=Math.floor(ax/step), ccy=Math.floor(ay/step);
+    const centers=[];
+    for(let i=-1;i<=1;i++) for(let j=-1;j<=1;j++){
+      const gx=ccx+i, gy=ccy+j; const r=h32(gx,gy,seed);
+      if(r<CONFIG.proc.clusterChance){
+        const ox=(h32(gx*3+1,gy*5+7,seed)-0.5)*step*0.6;
+        const oy=(h32(gx*7+11,gy*13+3,seed^0x55)-0.5)*step*0.6;
+        centers.push({x:gx*step+ox, y:gy*step+oy});
+      }
+    }
+    return centers;
+  }
+
+  function genChunk(cx,cy){
+    const s=CONFIG.proc.chunk; const baseX=cx*s, baseY=cy*s;
+    const centers = clusterCenters(cx,cy);
+    const asts=[];
+    for(let i=0;i<CONFIG.asteroid.perChunkTry;i++){
+      const rx=h32(cx*31+i, cy*17+i, CONFIG.proc.seed), ry=h32(cx*13+i, cy*29+i, CONFIG.proc.seed^0x9e37);
+      const x=baseX+rx*s, y=baseY+ry*s;
+      // compute distance to nearest cluster center
+      let nd=1e9; for(const c of centers){ const d=Math.hypot(x-c.x,y-c.y); if(d<nd) nd=d; }
+      if(nd < CONFIG.proc.clusterRadius){ // inside an island -> high chance to spawn
+        const r=h32(cx*7+i, cy*11+i, CONFIG.proc.seed^0x5bd1); const rad=CONFIG.asteroid.minR + r*(CONFIG.asteroid.maxR-CONFIG.asteroid.minR);
+        asts.push({x,y,r:rad,hp:rad*CONFIG.asteroid.hpScale});
+      } else if(Math.random()<0.05) {
+        // sparse lone rocks
+        const r=h32(cx*19+i, cy*23+i, CONFIG.proc.seed^0x77); const rad=CONFIG.asteroid.minR + r*(CONFIG.asteroid.maxR-CONFIG.asteroid.minR);
+        asts.push({x,y,r:rad,hp:rad*CONFIG.asteroid.hpScale});
+      }
+    }
+    return { asteroids:asts };
+  }
+
+  // ===== Systems =====
+  function update(dt){
+    const p=state.player; const aimW = state.camera.x + state.mouse.x; const aimH = state.camera.y + state.mouse.y; p.aimX=aimW; p.aimY=aimH;
+
+    // stream chunks
+    ensureChunksAround(p.x,p.y);
+    // flatten nearby asteroids list from chunks
+    state.asteroids = [];
+    const s=CONFIG.proc.chunk; const cx=Math.floor(p.x/s), cy=Math.floor(p.y/s);
+    for(let i=-2;i<=2;i++) for(let j=-2;j<=2;j++){ const k=(cx+i)+","+(cy+j); const ch=chunks.get(k); if(ch) state.asteroids.push(...ch.asteroids); }
+
+    // thrust + (opcional) auto-brake
+    let ax=0, ay=0; const thrust=CONFIG.player.thrust; if(state.keys.has('up')) ay -= thrust; if(state.keys.has('down')) ay += thrust; if(state.keys.has('left')) ax -= thrust; if(state.keys.has('right')) ax += thrust;
+    if(state.mouse.rdown){ const dx=aimW-p.x, dy=aimH-p.y; const l=Math.hypot(dx,dy)||1; ax += thrust*dx/l; ay += thrust*dy/l; particleThruster(p.x, p.y, Math.atan2(p.y-aimH,p.x-aimW), 2); }
+    const k = state.player.brake ? CONFIG.space.autoBrakePerSec : CONFIG.space.dragPerSec;
+    p.vx = (p.vx + ax*dt) * dragFactor(dt, k);
+    p.vy = (p.vy + ay*dt) * dragFactor(dt, k);
+    p.x += p.vx*dt; p.y += p.vy*dt;
+
+    // coords HUD
+    coordsEl.textContent = `${Math.round(p.x)} , ${Math.round(p.y)}`;
+
+    // regen HP
+    p.hp = Math.min(CONFIG.player.hpMax, p.hp + CONFIG.player.hpRegen*dt);
+
+    // weapons
+    if(state.mouse.down || state.keys.has('shoot')) fireWeapon();
+
+    // bullets update
+    for(const b of state.bullets){ b.x+=b.vx*dt; b.y+=b.vy*dt; b.life-=dt; }
+    state.bullets = state.bullets.filter(b=> b.life>0);
+
+    // heavy shots
+    for(const h of state.heavyShots){ h.x+=h.vx*dt; h.y+=h.vy*dt; h.life-=dt; }
+    state.heavyShots = state.heavyShots.filter(h=> h.life>0);
+
+    // missiles update with obstacle avoidance
+    for(const m of state.missiles){
+      let best=null, bd=1e9; for(const e of state.enemies){ const d=dist2(m.x,m.y,e.x,e.y); if(d<bd){ bd=d; best=e; }}
+      const curAng=Math.atan2(m.vy,m.vx); let desiredAng=curAng; if(best){ desiredAng=Math.atan2(best.y-m.y,best.x-m.x); }
+      // obstacle avoidance: check nearest asteroid along lookahead
+      const LA = CONFIG.missile.avoidLook; const pad = CONFIG.missile.avoidPad;
+      let avoid=0; let avoidSign=0;
+      const dirX=Math.cos(curAng), dirY=Math.sin(curAng);
+      for(const a of state.asteroids){
+        // project vector from missile to asteroid on current direction
+        const rx=a.x-m.x, ry=a.y-m.y; const proj=rx*dirX+ry*dirY; if(proj<0 || proj>LA) continue; // behind or too far
+        // perpendicular distance from line
+        const px=rx - proj*dirX, py=ry - proj*dirY; const d=Math.hypot(px,py);
+        const safe=a.r+pad; if(d<safe){ // steer away
+          const s=(safe-d)/safe; avoid += s; avoidSign += (px*dirY - py*dirX) > 0 ? 1 : -1; // choose side
+        }
+      }
+      if(avoid!==0){ desiredAng = curAng + avoidSign * clamp(avoid, -0.8, 0.8); }
+      // turn rate limit
+      const diff=((desiredAng-curAng+Math.PI*3)%(Math.PI*2))-Math.PI; const turn=clamp(diff, -CONFIG.missile.turn*dt, CONFIG.missile.turn*dt);
+      const sp=Math.hypot(m.vx,m.vy)||CONFIG.missile.speed; const na=curAng+turn; m.vx=Math.cos(na)*sp; m.vy=Math.sin(na)*sp;
+      m.x+=m.vx*dt; m.y+=m.vy*dt; m.life-=dt; if(m.life<=0) explode(m.x,m.y,CONFIG.missile.radius, CONFIG.missile.dmg);
+    }
+    state.missiles = state.missiles.filter(m=> m.life>0);
+
+    // enemy bullets
+    for(const eb of state.enemyBullets){ eb.x+=eb.vx*dt; eb.y+=eb.vy*dt; eb.life-=dt; }
+    state.enemyBullets = state.enemyBullets.filter(eb=> eb.life>0);
+
+    // wave spawner (raro pero intenso)
+    waveTimer -= dt; if(waveTimer<=0){ waveTimer=rand(CONFIG.enemy.waveEveryMin, CONFIG.enemy.waveEveryMax); spawnEnemyWave(p.x,p.y); hint('Oleada detectada'); }
+
+    // enemies AI coordinada
+    for(let i=state.enemies.length-1;i>=0;i--){ const e=state.enemies[i];
+      if(e.kind==='chaser' || e.kind==='tanker' || e.kind==='splitter'){
+        // avance coordinado: todos comparten fase de zigzag según groupPhase
+        const tgt = nearestTarget(e.x,e.y) || p; const dx=tgt.x-e.x, dy=tgt.y-e.y; const L=Math.hypot(dx,dy)||1; const s=e.spec.speed;
+        // zigzag leve sincronizado
+        const side = Math.sin((now() + e.phase)*1.2) * 0.6; const nx=dx/L, ny=dy/L; const px=-ny, py=nx;
+        e.vx=(nx + px*side)*s; e.vy=(ny + py*side)*s; e.x+=e.vx*dt; e.y+=e.vy*dt;
+      } else if(e.kind==='sniper'){
+        const tgt=p; const dx=tgt.x-e.x, dy=tgt.y-e.y; const L=Math.hypot(dx,dy)||1; const desired = e.spec.range*0.8;
+        const d=Math.hypot(dx,dy); const dir= (d>desired?1:-1); e.vx=(dx/L)*e.spec.speed*dir; e.vy=(dy/L)*e.spec.speed*dir; e.x+=e.vx*dt; e.y+=e.vy*dt;
+        e.cool=(e.cool||0)-dt; if(e.cool<=0 && d<=e.spec.range){ e.cool=e.spec.cooldown; const ang=Math.atan2(dy,dx); state.enemyBullets.push({x:e.x,y:e.y,vx:Math.cos(ang)*e.spec.bullet.speed, vy:Math.sin(ang)*e.spec.bullet.speed, life:2, dmg:e.spec.bullet.dmg}); }
+      }
+      // colisión y bloqueo con muros: empuje hacia fuera (cierre 100%)
+      for(let sI=state.structures.length-1;sI>=0;sI--){ const st=state.structures[sI]; if(!st.solid) continue; const dx=e.x-st.x, dy=e.y-st.y; const d=Math.hypot(dx,dy); const R=20; if(d<R){ const k=(R-d)/Math.max(0.001,d); e.x += dx*k; e.y += dy*k; st.hp-=20*dt; if(st.hp<=0){ state.structures.splice(sI,1); particleBurst(e.x,e.y,'#f87171'); } }
+      }
+    }
+
+    // player vs muros (opcional empuje leve)
+    for(const st of state.structures){ if(!st.solid) continue; const dx=p.x-st.x, dy=p.y-st.y; const d=Math.hypot(dx,dy); const R=22; if(d<R){ const k=(R-d)/Math.max(0.001,d); p.x += dx*k; p.y += dy*k; }}
+
+    // collisions bullets -> enemies
+    for(let i=state.bullets.length-1;i>=0;i--){ const b=state.bullets[i]; for(let j=state.enemies.length-1;j>=0;j--){ const e=state.enemies[j]; if(dist2(b.x,b.y,e.x,e.y) <= (e.spec.size||20)*(e.spec.size||20)){ e.hp-=b.dmg; b.life=0; if(e.hp<=0){ onEnemyDead(j,e); } break; } } }
+    for(let i=state.heavyShots.length-1;i>=0;i--){ const h=state.heavyShots[i]; for(let j=state.enemies.length-1;j>=0;j--){ const e=state.enemies[j]; if(dist2(h.x,h.y,e.x,e.y) <= (e.spec.size||20 + CONFIG.heavy.radius)*(e.spec.size||20 + CONFIG.heavy.radius)){ e.hp-=CONFIG.heavy.dmg; h.life=0; particleBurst(h.x,h.y,'#f87171'); if(e.hp<=0){ onEnemyDead(j,e); } break; } } }
+    // missiles explosions handled on explode()
+
+    // enemy bullets / touch -> player
+    for(let i=state.enemyBullets.length-1;i>=0;i--){ const eb=state.enemyBullets[i]; if(dist2(eb.x,eb.y,state.player.x,state.player.y) <= 16*16){ damagePlayer(eb.dmg||12); state.enemyBullets.splice(i,1); }}
+    for(const e of state.enemies){ if(dist2(e.x,e.y,state.player.x,state.player.y) <= (e.spec.touch||16)*(e.spec.touch||16)){ damagePlayer(16*dt); }}
+
+    // asteroids collisions (bullets/heavy)
+    for(let i=state.bullets.length-1;i>=0;i--){ const b=state.bullets[i]; for(const a of state.asteroids){ if(dist2(b.x,b.y,a.x,a.y) <= a.r*a.r){ a.hp-=b.dmg; b.life=0; if(a.hp<=0){ spawnOre(a); a.hp=CONFIG.asteroid.minR*CONFIG.asteroid.hpScale; } break; } } }
+    for(let i=state.heavyShots.length-1;i>=0;i--){ const h=state.heavyShots[i]; for(const a of state.asteroids){ if(dist2(h.x,h.y,a.x,a.y) <= (a.r+CONFIG.heavy.radius)*(a.r+CONFIG.heavy.radius)){ a.hp-=CONFIG.heavy.dmg*0.8; h.life=0; particleBurst(h.x,h.y,'#ef4444'); if(a.hp<=0){ spawnOre(a); a.hp=CONFIG.asteroid.minR*CONFIG.asteroid.hpScale; } break; } } }
+
+    // ores
+    const magR2 = CONFIG.ore.magnetR*CONFIG.ore.magnetR;
+    for(const o of state.ores){ o.x+=o.vx*dt; o.y+=o.vy*dt; o.vx*=0.98; o.vy*=0.98; for(const st of state.structures){ if(st.type==='collector' && dist2(o.x,o.y,st.x,st.y) < (st.radius*st.radius)){ const dx=st.x-o.x, dy=st.y-o.y; const L=Math.hypot(dx,dy)||1; o.vx += (dx/L)*220*dt; o.vy += (dy/L)*220*dt; } } if(dist2(o.x,o.y,p.x,p.y) < magR2){ const dx=p.x-o.x, dy=p.y-o.y; const L=Math.hypot(dx,dy)||1; o.vx += (dx/L)*260*dt; o.vy += (dy/L)*260*dt; } if(dist2(p.x,p.y,o.x,o.y) <= 16*16){ state.ore+=CONFIG.ore.value; o.remove=true; beep(1,0.03,520,0.02); } }
+    state.ores = state.ores.filter(o=> !o.remove);
+
+    // turrets
+    for(const st of state.structures){ if(st.type==='turret'){ let best=null, bd=1e9; for(const e of state.enemies){ const d=dist2(st.x,st.y,e.x,e.y); if(d<st.range*st.range && d<bd){ bd=d; best=e; }} if(best){ const ang=Math.atan2(best.y-st.y,best.x-st.x); st.rot = approachAngle(st.rot||0, ang, CONFIG.structures.turret.rotSpeed*dt); st.cool=(st.cool||0)-dt; if(st.cool<=0){ st.cool=CONFIG.structures.turret.fireRate; const vx=Math.cos(st.rot)*820, vy=Math.sin(st.rot)*820; state.bullets.push({x:st.x,y:st.y,vx,vy,life:1.2,dmg:14}); particleThruster(st.x,st.y,st.rot+Math.PI,2); beep(2,0.03,900,0.02); } } } }
+
+    // build mode
+    if(state.build.enabled){ const grid=CONFIG.grid.size*DPR; const gx = snap(aimW, grid); const gy = snap(aimH, grid); const valid = canPlace(gx,gy,state.build.sel); state.build.ghost={x:gx,y:gy,rot:state.build.rot, valid}; if(state.mouse.down && valid){ tryPlace(gx,gy); } } else state.build.ghost=null;
+
+    // camera con clamp en lead
+    const off = clampVec(state.player.vx*CONFIG.camera.lead, state.player.vy*CONFIG.camera.lead, CONFIG.camera.maxLead);
+    const cxTarget = p.x - canvas.width/2 + off[0];
+    const cyTarget = p.y - canvas.height/2 + off[1];
+    state.camera.x = lerp(state.camera.x, cxTarget, CONFIG.camera.lerp);
+    state.camera.y = lerp(state.camera.y, cyTarget, CONFIG.camera.lerp);
+
+    // HUD
+    updateHUD();
+  }
+
+  function updateHUD(){ scoreEl.textContent=state.score|0; livesEl.textContent=state.player.lives; oreEl.textContent=state.ore|0; hpEl.textContent=state.player.hp|0; }
+  function toggleOverlay(text){ panel.querySelector('.title').textContent=text||'Space Sandbox ∞'; overlay.style.display=text?'grid':'none'; }
+  function updateBuildbar(){ buildbar.querySelectorAll('.slot').forEach(el=> el.classList.toggle('active', el.dataset.type===state.build.sel)); }
+  function hint(text){ if(!text){ hintEl.style.display='none'; return;} hintEl.textContent=text; hintEl.style.display='block'; setTimeout(()=>{ hintEl.style.display='none'; }, 1400); }
+
+  // ===== Weapons =====
+  function cycleWeapon(dir){ const list=['blaster','heavy','missile']; let i=list.indexOf(state.weapon); i=(i+dir+list.length)%list.length; state.weapon=list[i]; weaponEl.textContent= state.weapon==='blaster'?'Bláster': state.weapon==='heavy'?'Cañón pesado':'Misil'; hint('Arma: '+weaponEl.textContent); }
+  function fireWeapon(){ const p=state.player; const t=now(); const ang=Math.atan2(p.aimY-p.y, p.aimX-p.x);
+    if(state.weapon==='blaster'){
+      if(t - p.lastShot < CONFIG.player.cooldown) return; p.lastShot=t;
+      const vx=Math.cos(ang)*CONFIG.bullet.speed + p.vx; const vy=Math.sin(ang)*CONFIG.bullet.speed + p.vy;
+      state.bullets.push({x:p.x,y:p.y,vx,vy,life:CONFIG.bullet.life,dmg:CONFIG.bullet.dmg}); particleThruster(p.x, p.y, ang+Math.PI, 4); beep(3,0.03,860,0.02);
+    } else if(state.weapon==='heavy'){
+      if(t - (p.lastHeavy||0) < CONFIG.heavy.cooldown) return; p.lastHeavy=t;
+      const vx=Math.cos(ang)*CONFIG.heavy.speed + p.vx; const vy=Math.sin(ang)*CONFIG.heavy.speed + p.vy;
+      state.heavyShots.push({x:p.x,y:p.y,vx,vy,life:CONFIG.heavy.life});
+      particleThruster(p.x, p.y, ang+Math.PI, 8); beep(0,0.07,140,0.05); // muy grave
+    } else { // missile
+      if(t - (p.lastMissile||0) < CONFIG.missile.cooldown) return; p.lastMissile=t;
+      const vx=Math.cos(ang)*CONFIG.missile.speed + p.vx; const vy=Math.sin(ang)*CONFIG.missile.speed + p.vy;
+      state.missiles.push({x:p.x,y:p.y,vx,vy,life:CONFIG.missile.life}); particleThruster(p.x,p.y,ang+Math.PI,8); beep(1,0.05,420,0.04);
+    }
+  }
+  function explode(x,y,r,dmg){ particleBurst(x,y,'#fde68a'); for(let j=state.enemies.length-1;j>=0;j--){ const e=state.enemies[j]; if(dist2(x,y,e.x,e.y) <= r*r){ e.hp-=dmg; if(e.hp<=0){ onEnemyDead(j,e); } } } }
+
+  // ===== Enemies =====
+  function spawnEnemyWave(x,y){
+    const kinds=['chaser','sniper','tanker','splitter']; const kind=kinds[Math.floor(Math.random()*kinds.length)]; const spec=CONFIG.types[kind];
+    const N = 6 + Math.floor(Math.random()*6);
+    const radius=1000; const phase=rand(0,Math.PI*2);
+    for(let i=0;i<N;i++){
+      const a=phase + (i/N)*Math.PI*2; const ex=x+Math.cos(a)*radius, ey=y+Math.sin(a)*radius;
+      state.enemies.push({x:ex,y:ey,vx:0,vy:0,hp:spec.hp,size:spec.size,kind,spec,phase:phase});
+    }
+  }
+  function onEnemyDead(idx,e){ state.enemies.splice(idx,1); state.score+=10; beep(0,0.05,700,0.03); particleBurst(e.x,e.y,'#fda4af'); if(e.kind==='splitter'){ for(let k=0;k<2;k++){ const a=Math.random()*Math.PI*2; const s=CONFIG.types.chaser; state.enemies.push({x:e.x+Math.cos(a)*18,y:e.y+Math.sin(a)*18,vx:0,vy:0,hp:16,size:14,kind:'chaser',spec:s,phase:now()}); } } }
+
+  // ===== Economy / Build =====
+  function tryPlace(x,y){ const type=state.build.sel; const stc=CONFIG.structures[type]; if(!stc) return; const cost=stc.cost; if(state.ore<cost){ hint('No hay mineral suficiente'); return; } const st={type,x,y,rot:state.build.rot, hp: stc.hp||80, range: stc.range||0, radius: stc.radius||0, minGap: stc.minGap||24, solid: !!stc.solid}; state.structures.push(st); state.ore-=cost; particleBurst(x,y,'#93c5fd'); beep(1,0.03,560,0.02); }
+  function salvageUnderCursor(){ const mx = state.camera.x + state.mouse.x, my = state.camera.y + state.mouse.y; for(let i=state.structures.length-1;i>=0;i--){ const st=state.structures[i]; if(dist2(mx,my,st.x,st.y) <= 18*18){ const cost = CONFIG.structures[st.type]?.cost||0; const refund = Math.floor(cost*CONFIG.refundRate); state.ore += refund; state.structures.splice(i,1); particleBurst(mx,my,'#60a5fa'); hint(`Reciclado +${refund}`); beep(2,0.03,720,0.02); return; } } }
+  function canPlace(x,y,type){ const stc = CONFIG.structures[type]; if(!stc) return false; for(const s of state.structures){ if(dist2(x,y,s.x,s.y) < (stc.minGap||24)*(stc.minGap||24)) return false; } for(const a of state.asteroids){ if(dist2(x,y,a.x,a.y) < (a.r+14)*(a.r+14)) return false; } return true; }
+
+  // ===== Damage / Player =====
+  function damagePlayer(d){ state.player.hp-=d; state.player.lastHit=now(); if(state.player.hp<=0){ gameOver(); } }
+  function gameOver(){ state.running=false; toggleOverlay("Game Over — Score: "+state.score+"  |  Mineral: "+state.ore); }
+
+  // ===== Targeting helper =====
+  function nearestTarget(x,y){ let best={x:state.player.x,y:state.player.y}, bestD=dist2(x,y,state.player.x,state.player.y); for(const st of state.structures){ const d=dist2(x,y,st.x,st.y); if(d<bestD){ bestD=d; best={x:st.x,y:st.y}; } } return best; }
+
+  // ===== Math & Render helpers =====
+  function pointInCircle(px,py,cx,cy,r){ const dx=px-cx, dy=py-cy; return dx*dx+dy*dy <= r*r; }
+  function approachAngle(a,b,s){ let d=((b-a+Math.PI*3)%(Math.PI*2))-Math.PI; if(d> s) d=s; if(d< -s) d=-s; return a+d; }
+  function particleBurst(x,y,color){ for(let i=0;i<12;i++){ const a=Math.random()*Math.PI*2; const sp=rand(60,180); state.particles.push({x,y,vx:Math.cos(a)*sp,vy:Math.sin(a)*sp,life:rand(0.3,0.7),color}); } }
+  function particleThruster(x,y,ang,n=6){ for(let i=0;i<n;i++){ const j=(Math.random()-0.5)*0.5; const sp=rand(120,260); state.particles.push({x,y,vx:Math.cos(ang+j)*sp,vy:Math.sin(ang+j)*sp,life:rand(0.2,0.4),color:'#60a5fa'}); } }
+
+  function draw(){
+    // fondo
+    ctx.fillStyle = '#020617'; ctx.fillRect(0,0,canvas.width,canvas.height);
+    drawStars(0.25, '#0b1220'); drawStars(0.55, '#0f1a2d'); drawStars(0.85, '#13223b');
+    // retícula
+    drawCrosshair();
+
+    ctx.save(); ctx.translate(-state.camera.x|0, -state.camera.y|0);
+
+    if(state.build.enabled && state.build.showGrid) drawGrid();
+
+    // asteroides
+    for(const a of state.asteroids){ const grd = ctx.createRadialGradient(a.x- a.r*0.3,a.y- a.r*0.3, a.r*0.2, a.x,a.y, a.r); grd.addColorStop(0,'#475569'); grd.addColorStop(1,'#0b1220'); ctx.fillStyle=grd; circle(a.x,a.y,a.r); ctx.fill(); ctx.strokeStyle='#111827'; ctx.globalAlpha=0.6; circle(a.x,a.y,a.r); ctx.stroke(); ctx.globalAlpha=1; }
+
+    // minerales
+    ctx.globalCompositeOperation='lighter'; ctx.fillStyle='#22c55e'; for(const o of state.ores){ circle(o.x,o.y,2); ctx.fill(); }
+    ctx.globalCompositeOperation='source-over';
+
+    // estructuras
+    for(const st of state.structures){ drawStructure(st); }
+
+    // enemigos
+    for(const e of state.enemies){ drawEnemy(e); }
+
+    // balas / misiles / balas enemigas / heavy
+    ctx.globalCompositeOperation='lighter'; ctx.fillStyle = '#e5e7eb'; for(const b of state.bullets){ ctx.fillRect((b.x-2)|0,(b.y-2)|0,4,4); }
+    ctx.fillStyle='#fde68a'; for(const m of state.missiles){ circle(m.x,m.y,2.5); ctx.fill(); }
+    ctx.fillStyle='#fca5a5'; for(const eb of state.enemyBullets){ ctx.fillRect((eb.x-2)|0,(eb.y-2)|0,4,4); }
+    ctx.fillStyle='#ef4444'; for(const h of state.heavyShots){ circle(h.x|0,h.y|0,CONFIG.heavy.radius); ctx.fill(); }
+    ctx.globalCompositeOperation='source-over';
+
+    // nave
+    drawShip(state.player);
+
+    // partículas
+    for(let i=state.particles.length-1;i>=0;i--){ const p=state.particles[i]; p.x+=p.vx*0.016; p.y+=p.vy*0.016; p.life-=0.016; if(p.life<=0) state.particles.splice(i,1); else { ctx.globalAlpha=Math.max(0,p.life*2); ctx.fillStyle=p.color; circle(p.x,p.y,2); ctx.fill(); ctx.globalAlpha=1; } }
+
+    // ghost de construcción
+    if(state.build.ghost){ const g=state.build.ghost; ctx.save(); ctx.globalAlpha=g.valid?0.7:0.5; if(!g.valid){ ctx.filter='grayscale(1)'; } drawStructure({type:state.build.sel,x:g.x,y:g.y,rot:g.rot, hp:1, range:CONFIG.structures.turret.range, radius:CONFIG.structures.collector.radius}); ctx.filter='none'; ctx.globalAlpha=1; ctx.fillStyle=g.valid?'#34d399':'#ef4444'; ctx.font='12px system-ui'; ctx.fillText(labelFor(state.build.sel), g.x+14, g.y-10); ctx.restore(); }
+
+    ctx.restore();
+  }
+
+  function labelFor(type){ const c=CONFIG.structures[type]?.cost||0; return `${type}  ·  coste ${c}`; }
+  function drawStars(scale,color){ const step=200*scale; const offx=((state.camera.x)*scale)%step; const offy=((state.camera.y)*scale)%step; ctx.fillStyle=color; for(let x=-offx;x<canvas.width;x+=step){ for(let y=-offy;y<canvas.height;y+=step){ ctx.fillRect(x|0,y|0,1,1); }} }
+  function drawGrid(){ const s=CONFIG.grid.size; const x0=Math.floor(state.camera.x/s)*s; const y0=Math.floor(state.camera.y/s)*s; ctx.strokeStyle='rgba(96,165,250,0.12)'; ctx.lineWidth=1; ctx.beginPath(); for(let x=x0; x<state.camera.x+canvas.width; x+=s){ ctx.moveTo(x, state.camera.y); ctx.lineTo(x, state.camera.y+canvas.height); } for(let y=y0; y<state.camera.y+canvas.height; y+=s){ ctx.moveTo(state.camera.x, y); ctx.lineTo(state.camera.x+canvas.width, y); } ctx.stroke(); }
+  function circle(x,y,r){ ctx.beginPath(); ctx.arc(x|0,y|0,r,0,Math.PI*2); }
+  function drawCrosshair(){ const mx=state.mouse.x, my=state.mouse.y; ctx.save(); ctx.strokeStyle='rgba(96,165,250,0.6)'; ctx.lineWidth=1; ctx.beginPath(); ctx.arc(mx,my,8,0,Math.PI*2); ctx.moveTo(mx-12,my); ctx.lineTo(mx+12,my); ctx.moveTo(mx,my-12); ctx.lineTo(mx,my+12); ctx.stroke(); ctx.restore(); }
+  function drawShip(p){ const ang=Math.atan2(p.aimY-p.y, p.aimX-p.x); ctx.save(); ctx.translate(p.x|0,p.y|0); ctx.rotate(ang); ctx.shadowColor='rgba(96,165,250,0.6)'; ctx.shadowBlur=16; const grd=ctx.createLinearGradient(-18,0,22,0); grd.addColorStop(0,'#60a5fa'); grd.addColorStop(1,'#34d399'); ctx.fillStyle=grd; ctx.beginPath(); ctx.moveTo(18,0); ctx.lineTo(-14,12); ctx.lineTo(-8,0); ctx.lineTo(-14,-12); ctx.closePath(); ctx.fill(); ctx.shadowBlur=0; ctx.fillStyle='#93c5fd'; ctx.fillRect(2,-4,10,8); const thx=-16, thy=0; const flare=6+Math.random()*8; ctx.globalCompositeOperation='lighter'; ctx.fillStyle='#fcd34d'; ctx.beginPath(); ctx.moveTo(thx,thy); ctx.lineTo(thx-6,thy+flare); ctx.lineTo(thx-6,thy-flare); ctx.closePath(); ctx.fill(); ctx.globalCompositeOperation='source-over'; ctx.restore(); }
+  function drawEnemy(e){ ctx.save(); ctx.translate(e.x|0,e.y|0); ctx.fillStyle= e.kind==='tanker'? '#f59e0b' : e.kind==='sniper'? '#a78bfa' : e.kind==='splitter'? '#67e8f9' : '#fca5a5'; circle(0,0,(e.spec.size||20)/2); ctx.fill(); ctx.fillStyle='#111827'; circle(-4,-2,2); ctx.fill(); circle(4,-2,2); ctx.fill(); ctx.restore(); }
+  function drawStructure(st){ ctx.save(); ctx.translate(st.x|0, st.y|0); ctx.rotate(st.rot||0); if(st.type==='turret'){ ctx.shadowColor='rgba(165,180,252,0.5)'; ctx.shadowBlur=10; ctx.fillStyle='#1f2937'; ctx.fillRect(-12,-12,24,24); ctx.shadowBlur=0; ctx.fillStyle='#a5b4fc'; ctx.fillRect(0,-4,20,8); ctx.globalAlpha=0.08; ctx.fillStyle='#60a5fa'; circle(0,0, CONFIG.structures.turret.range); ctx.fill(); ctx.globalAlpha=1; } else if(st.type==='wall'){ ctx.fillStyle='#64748b'; ctx.fillRect(-14,-10,28,20); } else if(st.type==='collector'){ ctx.shadowColor='rgba(16,185,129,0.5)'; ctx.shadowBlur=10; ctx.fillStyle='#34d399'; ctx.fillRect(-10,-10,20,20); ctx.shadowBlur=0; ctx.globalAlpha=0.1; ctx.fillStyle='#10b981'; circle(0,0, CONFIG.structures.collector.radius); ctx.fill(); ctx.globalAlpha=1; } ctx.restore(); }
+
+  // ===== Helpers =====
+  function spawnOre(a){ const n=Math.ceil(a.r/12); for(let k=0;k<n;k++){ const ang=Math.random()*Math.PI*2; const m=rand(40,120); state.ores.push({x:a.x,y:a.y,vx:Math.cos(ang)*m,vy:Math.sin(ang)*m}); } state.score+=5; beep(3,0.04,820,0.03); }
+
+  // ===== Dev self-tests =====
+  ;(function devTests(){
+    console.assert(dist2(0,0,3,4)===25, 'dist2');
+    const a1=approachAngle(0, Math.PI, 0.5); console.assert(a1>0 && a1<Math.PI, 'approachAngle');
+    const s=CONFIG.grid.size; console.assert(snap(11,s)===snap(13,s), 'snap');
+    console.assert(h32(0,0,1337)!==h32(1,0,1337), 'hash variance');
+    console.assert(typeof beep === 'function', 'beep exists');
+    const off=clampVec(1000,0,CONFIG.camera.maxLead); console.assert(Math.hypot(off[0],off[1])<=CONFIG.camera.maxLead+1e-6, 'camera lead clamped');
+  })();
+
+  // ===== Init =====
+  toggleOverlay('Space Sandbox ∞');
+  state.player.x=0; state.player.y=0; state.camera.x = state.player.x - canvas.width/2; state.camera.y = state.player.y - canvas.height/2; draw();
+  </script>
+</body>
+</html>
